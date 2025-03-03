@@ -1,0 +1,48 @@
+## Super important update ##
+
+- Instead of training the decoder to recover the embedded QR , create a CNN classifier instead of decoder that can classify if 
+pattern are embedded or not 
+
+- Use a moiree pattern that should be embedded in repeating manner across the entire images and the verification engine should just check
+that whether there is some pattern present or not in the image
+
+- After fixing an algorithm/ encoder to embed insvisible pattern , Prepare two datasets by first printing the images which has embedded
+patterns in them and other image as not and capture those images via mobile phones then train our CNN classifier to classify if the pattern
+is present or not.
+
+
+1. Data Augmentation with Real-World Distortions
+
+
+JPEG Compression: Simulate different compression levels (e.g., quality 50-90).
+Blur & Motion Blur: Mimic slight defocusing and camera movement.
+Lighting Variations: Adjust brightness, contrast, and shadows.
+Perspective Warping: Simulate different camera angles and distortions.
+Noise Injection: Add Gaussian and Poisson noise to simulate printing artifacts.
+
+
+2. Super-Resolution for Watermark Extraction
+Add a super-resolution module to refine the extracted watermark, making it more readable after distortions.
+Use CNN-based or Transformer-based super-resolution networks.
+
+
+3. Frequency Domain Processing
+Embed the watermark in DWT-DCT or FFT domains instead of pixel space.
+Frequency-based embedding is more resilient to compression and printing distortions.
+
+
+4. Hybrid Encoder Architecture
+Combine ResNet50/VGG16 feature extraction with transformer-based self-attention layers to enhance spatial consistency.
+
+
+5. Adversarial Training with a Discriminator
+Train a GAN-based discriminator to ensure that encoded images are indistinguishable from originals.
+This helps prevent visible artifacts in the printed version.
+
+
+6. Auto-Calibration Mechanism
+Implement adaptive learning where the decoder estimates distortions and applies inverse transformations before extraction.
+
+
+7. Use of a QR-Code-based Watermark
+If the watermark is a QR code, use error correction (Reed-Solomon codes) to improve retrieval accuracy.

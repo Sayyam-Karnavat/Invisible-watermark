@@ -108,8 +108,8 @@ def extract_qr(stego_img_path, region=None):
     return decoded_text, extracted_img
 
 if __name__ == '__main__':
-    cover_img_path = "dataset/original.png"     # Provide your cover image path.
-    stego_img_path = "dataset/stego.png"     # Output stego image path.
+    cover_img_path = "original.png"     # Provide your cover image path.
+    stego_img_path = "stego.png"     # Output stego image path.
     text_to_encode = "This is a hidden QR code."
 
     # Embed the QR code invisibly into the middle of the cover image.
