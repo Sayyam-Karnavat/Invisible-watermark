@@ -5,69 +5,45 @@ import tensorflow as tf
 from tensorflow.keras import layers, models
 import numpy as np
 import qrcode
-from PIL import Image
 
 # Set random seed for reproducibility
 np.random.seed(42)
+tf.random.set_seed(42)
 
 #####################################
-# Build the Decoder Model
+# Custom Layers for DCT and IDCT (Serializable)
 #####################################
-def build_decoder(input_shape=(256,256,3)):
-    """
-    Builds a decoder network that extracts the QR code watermark from the encoded image.
-    The network downscales the encoded image and then upsamples to recover the watermark.
-    """
-    encoded_input = layers.Input(shape=input_shape, name="encoded_input")
-    
-    # ------------------ Downsampling Path ------------------
-    x = layers.Conv2D(64, (3,3), activation="relu", padding="same")(encoded_input)
-    x = layers.MaxPooling2D((2,2))(x)  # -> 128x128x64
-    x = layers.Conv2D(128, (3,3), activation="relu", padding="same")(x)
-    x = layers.MaxPooling2D((2,2))(x)  # -> 64x64x128
-    x = layers.Conv2D(256, (3,3), activation="relu", padding="same")(x)
-    x = layers.MaxPooling2D((2,2))(x)  # -> 32x32x256
-    x = layers.Conv2D(512, (3,3), activation="relu", padding="same")(x)
-    x = layers.MaxPooling2D((2,2))(x)  # -> 16x16x512
+class DCTLayer(layers.Layer):
+    def call(self, x):
+        x = tf.transpose(x, perm=[0, 2, 3, 1])  # [B, W, C, H]
+        x = tf.signal.dct(x, type=2, norm='ortho', axis=-1)
+        x = tf.transpose(x, perm=[0, 3, 1, 2])  # [B, H, W, C]
 
-    # ------------------ Bottleneck ------------------
-    x = layers.Conv2D(512, (3,3), activation="relu", padding="same")(x)
-    
-    # ------------------ Upsampling Path ------------------
-    x = layers.Conv2DTranspose(512, (3,3), strides=2, padding="same", activation="relu")(x)  # -> 32x32x512
-    x = layers.Conv2DTranspose(256, (3,3), strides=2, padding="same", activation="relu")(x)  # -> 64x64x256
-    x = layers.Conv2DTranspose(128, (3,3), strides=2, padding="same", activation="relu")(x)  # -> 128x128x128
-    x = layers.Conv2DTranspose(64, (3,3), strides=2, padding="same", activation="relu")(x)   # -> 256x256x64
-    extracted_watermark = layers.Conv2D(1, (3,3), activation="sigmoid", padding="same", name="extracted_watermark")(x)
+        x = tf.transpose(x, perm=[0, 1, 3, 2])  # [B, H, C, W]
+        x = tf.signal.dct(x, type=2, norm='ortho', axis=-1)
+        x = tf.transpose(x, perm=[0, 1, 3, 2])  # [B, H, W, C]
+        return x
 
-    decoder = models.Model(inputs=encoded_input, outputs=extracted_watermark, name="Decoder")
-    return decoder
+    def get_config(self):
+        return super().get_config()
+
+class IDCTLayer(layers.Layer):
+    def call(self, x):
+        x = tf.transpose(x, perm=[0, 2, 3, 1])  # [B, W, C, H]
+        x = tf.signal.idct(x, type=3, norm='ortho', axis=-1)
+        x = tf.transpose(x, perm=[0, 3, 1, 2])  # [B, H, W, C]
+
+        x = tf.transpose(x, perm=[0, 1, 3, 2])  # [B, H, C, W]
+        x = tf.signal.idct(x, type=3, norm='ortho', axis=-1)
+        x = tf.transpose(x, perm=[0, 1, 3, 2])  # [B, H, W, C]
+        return x
+
+    def get_config(self):
+        return super().get_config()
 
 #####################################
-# Data Pipeline for Decoder Training
+# Utility: Generate QR Code Watermark
 #####################################
-def load_and_preprocess_image(filepath):
-    """
-    Loads an image from disk (already 256x256, RGB), decodes it,
-    sets the shape explicitly, and normalizes pixel values to [0,1].
-    """
-    image = tf.io.read_file(filepath)
-    image = tf.image.decode_image(image, channels=3)
-    image.set_shape([256, 256, 3])
-    image = tf.cast(image, tf.float32) / 255.0
-    return image
-
-# Directory containing your augmented cover images (same as used for encoder training)
-augmented_dir = "dataset/augmented_images"
-file_pattern = os.path.join(augmented_dir, "*.png")
-cover_ds = tf.data.Dataset.list_files(file_pattern, shuffle=True)
-cover_ds = cover_ds.map(load_and_preprocess_image, num_parallel_calls=tf.data.AUTOTUNE)
-cover_ds = cover_ds.batch(8)
-
-# Load the saved encoder model to generate encoded images on-the-fly
-encoder = tf.keras.models.load_model("encoder_model.keras")
-
-# Generate the same QR watermark as ground truth
 def generate_qr_code(data="Hidden Watermark", size=256):
     qr = qrcode.QRCode(
         version=1,
@@ -82,36 +58,83 @@ def generate_qr_code(data="Hidden Watermark", size=256):
     arr = np.array(img, dtype=np.float32) / 255.0
     return arr
 
-qr_watermark_np = generate_qr_code(data="Hidden Watermark", size=256)
-qr_watermark_np = np.expand_dims(qr_watermark_np, axis=-1)  # (256,256,1)
-watermark_tensor = tf.convert_to_tensor(qr_watermark_np, dtype=tf.float32)
-
-# For each batch of cover images, generate encoded images and the corresponding watermark label
-def generate_encoded_and_label(cover_batch):
-    batch_size = tf.shape(cover_batch)[0]
-    # Tile the same watermark for the batch
-    watermark_batch = tf.tile(tf.expand_dims(watermark_tensor, axis=0), [batch_size,1,1,1])
-    encoded = encoder([cover_batch, watermark_batch], training=False)
-    return encoded, watermark_batch
-
-train_ds_decoder = cover_ds.map(generate_encoded_and_label, num_parallel_calls=tf.data.AUTOTUNE)
-train_ds_decoder = train_ds_decoder.prefetch(tf.data.AUTOTUNE)
-
 #####################################
-# Build, Compile & Train Decoder
+# Build Decoder Model
 #####################################
-decoder = build_decoder()
-decoder.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001), loss="mse")
 
-# Train the decoder on the encoded images generated from augmented cover images
-decoder.fit(train_ds_decoder, epochs=100)
-decoder.save("decoder_model.keras")
+def build_decoder(encoded_shape=(256,256,3), watermark_shape=(256,256,1)):
+    encoded_input = layers.Input(shape=encoded_shape, name="encoded_image")
+    
+    # Downsampling: Extract deep features from the encoded image.
+    x = layers.Conv2D(64, (3,3), strides=1, padding="same", activation="relu")(encoded_input)  # Keep stride=1 for finer details
+    x = layers.MaxPooling2D((2,2), strides=2, padding="same")(x)  # Downsample to 128x128
+    
+    x = layers.Conv2D(128, (3,3), strides=1, padding="same", activation="relu")(x)
+    x = layers.MaxPooling2D((2,2), strides=2, padding="same")(x)  # Downsample to 64x64
+    
+    x = layers.Conv2D(256, (3,3), strides=1, padding="same", activation="relu")(x)
+    x = layers.MaxPooling2D((2,2), strides=2, padding="same")(x)  # Downsample to 32x32
+    
+    # Residual Connection: Save this feature map for later use
+    skip_connection = x
 
-# (Optional) Save one example of extracted watermark for inspection
-for encoded_batch, watermark_batch in train_ds_decoder.take(1):
-    extracted = decoder.predict(encoded_batch)
-    np.save("extracted_watermark.npy", extracted)
-    np.save("original_watermark.npy", watermark_batch.numpy())
-    break
+    # Apply DCT and process frequency domain features.
+    freq = DCTLayer()(x)
+    freq_processed = layers.Conv2D(256, (3,3), activation="relu", padding="same")(freq)
+    x = layers.Subtract()([x, freq_processed])
+    x = IDCTLayer()(x)
 
-print("Decoder training complete. Model saved.")
+    # Add Residual Skip Connection to restore lost details
+    x = layers.Add()([x, skip_connection])  
+
+    # Upsampling: Recover spatial resolution for the watermark.
+    x = layers.Conv2DTranspose(128, (3,3), strides=2, padding="same", activation="relu")(x)  # 64x64x128
+    x = layers.Conv2DTranspose(64, (3,3), strides=2, padding="same", activation="relu")(x)   # 128x128x64
+    x = layers.Conv2DTranspose(32, (3,3), strides=2, padding="same", activation="relu")(x)   # 256x256x32
+    
+    # Final Refinement Block: Helps improve details before final output.
+    x = layers.Conv2D(32, (3,3), activation="relu", padding="same")(x)
+    x = layers.Conv2D(16, (3,3), activation="relu", padding="same")(x)
+    
+    # Output layer: Reconstruct the watermark (1 channel).
+    decoded_watermark = layers.Conv2D(1, (3,3), activation="sigmoid", padding="same", name="decoded_watermark")(x)
+    
+    decoder = models.Model(inputs=encoded_input, outputs=decoded_watermark, name="Decoder")
+    return decoder
+
+
+
+
+
+if __name__ == "__main__":
+    
+
+    #####################################
+    # Prepare Decoder Training Data
+    #####################################
+    # Load the encoded images saved from the encoder.
+    encoded_images = np.load("encoded_images.npy")  # shape: (num_examples, 256,256,3)
+
+    # Generate the watermark that was used during encoding.
+    qr_watermark_np = generate_qr_code(data="Hidden Watermark", size=256)
+    qr_watermark_np = np.expand_dims(qr_watermark_np, axis=-1)  # shape: (256,256,1)
+
+    # Since the same watermark was used for all examples, create labels by repeating the watermark.
+    num_examples = encoded_images.shape[0]
+    watermarks = np.repeat(np.expand_dims(qr_watermark_np, axis=0), num_examples, axis=0)
+
+    # Create a dataset for decoder training.
+    decoder_ds = tf.data.Dataset.from_tensor_slices((encoded_images, watermarks))
+    decoder_ds = decoder_ds.batch(8).prefetch(tf.data.AUTOTUNE)
+
+    #####################################
+    # Training the Decoder
+    #####################################
+    decoder = build_decoder()
+    decoder.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005), loss="mse")
+    decoder.fit(decoder_ds, epochs=100)
+
+    # Save the model with custom layers
+    decoder.save("decoder_model.keras")
+
+    print("Decoder training complete. Model saved.")
