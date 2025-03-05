@@ -6,16 +6,17 @@ import cv2
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 import qrcode
 from PIL import Image
+import random
 
-# Set TensorFlow environment flag to optimize performance
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0"
+# Set OneDNN flag for TensorFlow optimizations
+
 
 # Define paths
-dataset_path = "dataset/original_images"   # Folder containing original images
-watermark_path = "dataset/qr_watermarks"   # Folder to save generated QR codes
-augmented_path = "dataset/augmented_images"  # Folder to save augmented images
+dataset_path = "dataset/original_images"       # Folder containing original images
+watermark_path = "dataset/qr_watermarks"         # Folder to save generated QR codes
+augmented_path = "dataset/augmented_images"      # Folder to save augmented images
 
-# Create necessary directories
+# Create necessary directories if they don't exist
 os.makedirs(augmented_path, exist_ok=True)
 os.makedirs(watermark_path, exist_ok=True)
 
@@ -32,40 +33,33 @@ datagen = ImageDataGenerator(
     fill_mode="nearest"
 )
 
-# ----------------------- Load and Augment Cover Images -----------------------
-
-def load_and_augment_images(dataset_path, save_path, target_size=(256, 256), num_augmented=100):
+# ----------------------- Function to Augment Cover Images -----------------------
+def load_and_augment_images(dataset_path, save_path, target_size=(256, 256), num_augmented=10):
     """
     Loads images from dataset_path, applies augmentation, and saves them to save_path.
     """
     for filename in os.listdir(dataset_path):
         if filename.lower().endswith((".jpg", ".jpeg", ".png")):
             image_path = os.path.join(dataset_path, filename)
-            
-            # Load and resize image
             image = cv2.imread(image_path)
             image = cv2.resize(image, target_size)
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Ensure RGB format
-            
-            # Expand dimensions to match ImageDataGenerator input shape
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             image = np.expand_dims(image, axis=0)  # Shape: (1, 256, 256, 3)
             
             # Generate augmented images
             aug_iter = datagen.flow(image, batch_size=1)
             for i in range(num_augmented):
-                augmented_image = next(aug_iter)[0]  # Get the first batch
-                
-                # Convert to uint8 and save
+                augmented_image = next(aug_iter)[0]
                 augmented_image = (augmented_image * 255).astype(np.uint8)
                 save_filename = os.path.join(save_path, f"{os.path.splitext(filename)[0]}_aug{i}.png")
                 cv2.imwrite(save_filename, cv2.cvtColor(augmented_image, cv2.COLOR_RGB2BGR))
 
-# ----------------------- Generate QR Code Watermarks -----------------------
-
+# ----------------------- Function to Generate Pool of QR Codes -----------------------
 def generate_qr_codes(data_list, save_path, size=256):
     """
     Generates QR code images from a list of text data and saves them as grayscale images.
     """
+    qr_codes = []
     for i, data in enumerate(data_list):
         qr = qrcode.QRCode(
             version=1,
@@ -75,23 +69,26 @@ def generate_qr_codes(data_list, save_path, size=256):
         )
         qr.add_data(data)
         qr.make(fit=True)
-        
-        # Convert to grayscale image and resize
         img = qr.make_image(fill_color="black", back_color="white").convert("L")
         img = img.resize((size, size))
-        
-        # Convert to NumPy array and normalize
-        qr_array = np.array(img, dtype=np.uint8)
+        qr_array = np.array(img, dtype=np.float32) / 255.0
+        qr_codes.append(qr_array)
         save_filename = os.path.join(save_path, f"qr_{i}.png")
-        cv2.imwrite(save_filename, qr_array)
+        cv2.imwrite(save_filename, (qr_array*255).astype(np.uint8))
+    return np.array(qr_codes)  # Shape: (num_qr, size, size)
 
-# ----------------------- Run Dataset Preparation -----------------------
-
-# 1. Augment Cover Images
-load_and_augment_images(dataset_path, augmented_path)
-
-# # 2. Generate QR Codes for Watermarking
-# sample_watermark_texts = ["Hidden Watermark 1", "Secret Key", "QR Code 12345"]
-# generate_qr_codes(sample_watermark_texts, watermark_path)
-
-# print("Dataset preparation complete.")
+# ----------------------- Main Dataset Preparation -----------------------
+if __name__ == "__main__":
+    # 1. Augment Cover Images
+    print("Augmenting cover images...")
+    load_and_augment_images(dataset_path, augmented_path, target_size=(256, 256), num_augmented=10)
+    
+    # 2. Generate a pool of 100 QR Codes
+    print("Generating QR code pool...")
+    qr_texts = [f"Hidden Watermark {i+1}" for i in range(100)]
+    qr_codes_pool = generate_qr_codes(qr_texts, watermark_path, size=256)
+    
+    # Save the QR code pool for later use (e.g., in encoder training)
+    np.save(os.path.join(watermark_path, "qr_pool.npy"), qr_codes_pool)
+    
+    print("Dataset preparation complete.")
