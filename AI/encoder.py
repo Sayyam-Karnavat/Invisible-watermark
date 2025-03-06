@@ -167,7 +167,6 @@ def build_encoder(image_shape=(256,256,3), watermark_shape=(256,256,1)):
 #####################################
 # Data Pipeline and Negative Samples Setup
 #####################################
-
 def load_and_preprocess_image(filepath):
     image = tf.io.read_file(filepath)
     image = tf.image.decode_png(image, channels=3)
@@ -175,11 +174,19 @@ def load_and_preprocess_image(filepath):
     image = tf.image.resize(image, (256, 256))
     return image
 
-def add_watermark(image, image_path, qr_code, qr_index):
-    watermark = np.expand_dims(qr_code, axis=-1)  
-    return (image, tf.convert_to_tensor(watermark, dtype=tf.float32)), image, image_path, qr_index
-
-
+def add_watermark(image, image_path, qr_codes_pool):
+    """ Embed watermark 80% of the time, else use empty watermark """
+    if random.random() < 0.8:  # 80% chance to embed a watermark
+        qr_index = random.randint(0, len(qr_codes_pool) - 1)
+        qr_code = qr_codes_pool[qr_index]
+        is_embedded = 1  # QR is embedded
+    else:  # 20% chance to use an empty watermark
+        qr_code = np.zeros_like(qr_codes_pool[0])  # Create empty watermark
+        qr_index = -1  # Special marker for empty watermark
+        is_embedded = 0  # No QR embedded
+    
+    watermark = np.expand_dims(qr_code, axis=-1)
+    return (image, tf.convert_to_tensor(watermark, dtype=tf.float32)), image, image_path, qr_index, is_embedded
 
 if __name__ == "__main__":
     # Load augmented cover images
@@ -194,26 +201,24 @@ if __name__ == "__main__":
     watermarks = []
     image_paths = []
     qr_indices = []
+    is_qr_embedded_list = []  # New list for embedding status
 
     for file in cover_files:
         img = load_and_preprocess_image(file)
-        idx = random.randint(0, len(qr_codes_pool) - 1)
-        qr_code = qr_codes_pool[idx]
-        (img_tensor, qr_tensor), _, _, _ = add_watermark(img, file, qr_code, idx)
+        (img_tensor, qr_tensor), _, _, qr_idx, is_embedded = add_watermark(img, file, qr_codes_pool)
 
-        # Instead of storing file path and index, store the actual arrays:
-        cover_images.append(img_tensor)                # TF tensor for cover image
-        watermarks.append(qr_tensor)                   # TF tensor for QR code image
-        df_records.append((img_tensor.numpy(), qr_tensor.numpy(), None))  # Convert to numpy arrays
+        cover_images.append(img_tensor)  # TF tensor for cover image
+        watermarks.append(qr_tensor)  # TF tensor for QR code image
+        df_records.append((img_tensor.numpy(), qr_tensor.numpy(), None, qr_idx, is_embedded))  # Store QR index & embedding flag
 
-    # Then create your dataset as before:
+    # Create TensorFlow dataset
     train_ds = tf.data.Dataset.from_tensor_slices(((cover_images, watermarks), cover_images))
     train_ds = train_ds.batch(5).prefetch(tf.data.AUTOTUNE)
 
     # Train the encoder
     encoder = build_encoder()
     encoder.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005), loss="mse")
-    encoder.fit(train_ds, epochs=400)
+    encoder.fit(train_ds, epochs=500)
     encoder.save("encoder_model.keras")
 
     # Predict embedded images
@@ -221,10 +226,10 @@ if __name__ == "__main__":
     
     # Fill the third column in the DataFrame
     for i, enc_img in enumerate(encoded_images):
-        df_records[i] = (df_records[i][0], df_records[i][1], enc_img)
+        df_records[i] = (df_records[i][0], df_records[i][1], enc_img, df_records[i][3], df_records[i][4])  # Keep QR index & flag
 
     # Create and save DataFrame
-    df = pd.DataFrame(df_records, columns=["original_image", "QR_code", "embedded_image"])
+    df = pd.DataFrame(df_records, columns=["original_image", "QR_code", "embedded_image", "QR_index", "is_qr_embedded"])
     df.to_pickle("dataset/encoded_images.pkl")
 
     print("Encoder training complete. Model and dataset saved.")

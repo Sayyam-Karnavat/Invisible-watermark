@@ -26,3 +26,6 @@ Ensure extraction still works after compression, printing, and capturing.
 
 
 - use error correction (Reed-Solomon codes) to improve retrieval accuracy.
+
+- For an image augment more data
+

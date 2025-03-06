@@ -78,6 +78,8 @@ def generate_qr_codes(data_list, save_path, size=256):
     return np.array(qr_codes)  # Shape: (num_qr, size, size)
 
 # ----------------------- Main Dataset Preparation -----------------------
+
+
 if __name__ == "__main__":
     # 1. Augment Cover Images
     print("Augmenting cover images...")

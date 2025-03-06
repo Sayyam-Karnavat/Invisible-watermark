@@ -124,7 +124,7 @@ if __name__ == "__main__":
     decoder.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005), loss="mse")
     
     # Train the decoder
-    decoder.fit(decoder_ds, epochs=100)
+    decoder.fit(decoder_ds, epochs=400)
     
     # Save the trained decoder model
     decoder.save("decoder_model.keras")
